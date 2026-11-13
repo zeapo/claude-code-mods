@@ -1,6 +1,71 @@
 {
   "name": "effort-router",
-  "version": "0.1.0",
-  "description": "Classifies each message as discussion or implementation, sets the main model's effort to match, and routes implementation to an Opus implementer agent.",
-  "types": "./types/index.d.ts"
+  "version": "0.2.0",
+  "description": "Classifies each message as discussion or implementation, sets the main model's effort (and optionally its model) to match, and routes implementation to an implementer agent.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "chat_effort": {
+      "type": "string",
+      "title": "Chat effort",
+      "description": "Effort of the main loop on a discussion message.",
+      "default": "low",
+      "options": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "impl_effort": {
+      "type": "string",
+      "title": "Implementation effort",
+      "description": "Effort of the main loop on an implementation message.",
+      "default": "high",
+      "options": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "chat_model": {
+      "type": "string",
+      "title": "Chat model",
+      "description": "Model of the main loop on a discussion message: an alias (haiku, sonnet, opus) or a full id. Empty keeps the session's model. A model that changes between messages loses the prompt cache.",
+      "default": ""
+    },
+    "impl_model": {
+      "type": "string",
+      "title": "Implementation model",
+      "description": "Model of the main loop on an implementation message: an alias or a full id. Empty keeps the session's model. A model that changes between messages loses the prompt cache.",
+      "default": ""
+    },
+    "routed_model": {
+      "type": "string",
+      "title": "Routed session model",
+      "description": "Only a session whose model id contains this text is routed. Empty routes every model.",
+      "default": "fable"
+    },
+    "classifier_model": {
+      "type": "string",
+      "title": "Classifier model",
+      "description": "Model that decides chat or impl for each message: an alias or a full id.",
+      "default": "haiku"
+    },
+    "classifier_timeout_ms": {
+      "type": "number",
+      "title": "Classifier timeout (ms)",
+      "description": "How long the classifier may take before the mode in force is kept.",
+      "default": 2500
+    },
+    "delegate": {
+      "type": "boolean",
+      "title": "Delegate implementation",
+      "description": "On an implementation message, tell the main model to hand the code changes to the implementer agent. Off: only the effort and model change.",
+      "default": true
+    },
+    "implementer_model": {
+      "type": "string",
+      "title": "Implementer model",
+      "description": "Model of the implementer agent: an alias or a full id.",
+      "default": "opus"
+    },
+    "implementer_effort": {
+      "type": "string",
+      "title": "Implementer effort",
+      "description": "Default effort of the implementer agent; the main model may pass another on a call.",
+      "default": "high",
+      "options": ["low", "medium", "high", "xhigh", "max"]
+    }
+  }
 }

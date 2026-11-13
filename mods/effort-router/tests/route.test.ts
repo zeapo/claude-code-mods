@@ -28,6 +28,7 @@ const typed = (text: string) =>
 test('the main loop on Fable runs at the mode effort', async ($, on) => {
   const sent: (TurnStepInput['effort'] | undefined)[] = []
   on('command.register', () => ({ value: { command: 'route' } }))
+  on('agent.register', () => ({ value: { agent: 'effort-router:implementer' } }))
   on('ui.status', () => ({ value: undefined }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   // Stands for the engine: records the effort the request would go out with.
@@ -173,3 +174,115 @@ test('a bare approval in impl makes no classifier call', async ($, on) => {
 
   expect(calls).toBe(0)
 })
+
+test(
+  'each mode runs with its configured effort and model',
+  { options: { chat_effort: 'medium', chat_model: 'sonnet', impl_effort: 'xhigh' } },
+  async ($, on) => {
+    const sent: string[] = []
+    on('command.register', () => ({ value: { command: 'route' } }))
+    on('ui.status', () => ({ value: undefined }))
+    on('turn.step', async function* (_, e) {
+      sent.push(`${e.model} ${e.effort}`)
+
+      return ANSWER
+    })
+
+    const chat = await $.command.run(route('chat'))
+    expect(chat.text).toContain('Mode: chat (main loop on sonnet at medium effort), pinned.')
+    for await (const _ of $.turn.step(STEP)) void _
+
+    // An empty impl model keeps the session's.
+    await $.command.run(route('impl'))
+    for await (const _ of $.turn.step(STEP)) void _
+
+    // A level the person raised stays, and the mode's model still applies.
+    await $.command.run(route('chat'))
+    for await (const _ of $.turn.step({ ...STEP, effort: 'max' })) void _
+
+    expect(sent).toEqual([
+      'sonnet medium',
+      'claude-fable-5-2 xhigh',
+      'sonnet max',
+    ])
+  },
+)
+
+test(
+  'an empty routed model routes every session model',
+  { options: { routed_model: '' } },
+  async ($, on) => {
+    const sent: (TurnStepInput['effort'] | undefined)[] = []
+    on('command.register', () => ({ value: { command: 'route' } }))
+    on('ui.status', () => ({ value: undefined }))
+    on('turn.step', async function* (_, e) {
+      sent.push(e.effort)
+
+      return ANSWER
+    })
+
+    await $.command.run(route('chat'))
+    for await (const _ of $.turn.step({ ...STEP, model: 'claude-opus-5-5' }))
+      void _
+
+    expect(sent).toEqual(['low'])
+  },
+)
+
+test(
+  'the implementer is registered with its configured model and effort',
+  { options: { implementer_model: 'sonnet', implementer_effort: 'medium' } },
+  async ($, on) => {
+    const specs: { name: string; model?: string; effort?: string | number }[] = []
+    let context: readonly string[] | undefined
+    on('command.register', () => ({ value: { command: 'route' } }))
+    on('agent.register', (_, e) => {
+      specs.push({ name: e.name, model: e.model, effort: e.effort })
+
+      return { value: { agent: `effort-router:${e.name}` } }
+    })
+    on('ui.status', () => ({ value: undefined }))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    on('prompt.submit', (_, e) => {
+      context = e.context
+
+      return { text: e.text, context: e.context }
+    })
+
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    expect(specs).toEqual([{ name: 'implementer', model: 'sonnet', effort: 'medium' }])
+
+    await $.command.run(route('impl'))
+    await $.prompt.submit(typed('add a retry to the fetch'))
+    expect(context?.[0]).toContain('(model sonnet, medium effort by default)')
+  },
+)
+
+test(
+  'with delegation off, no agent is registered and no note is added',
+  { options: { delegate: false } },
+  async ($, on) => {
+    let registered = 0
+    let context: readonly string[] | undefined
+    on('command.register', () => ({ value: { command: 'route' } }))
+    on('agent.register', () => {
+      registered += 1
+
+      return { value: { agent: 'effort-router:implementer' } }
+    })
+    on('ui.status', () => ({ value: undefined }))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    on('prompt.submit', (_, e) => {
+      context = e.context
+
+      return { text: e.text, context: e.context }
+    })
+
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await $.command.run(route('impl'))
+    await $.prompt.submit(typed('add a retry to the fetch'))
+
+    expect(registered).toBe(0)
+    expect(context).toBeUndefined()
+  },
+)
