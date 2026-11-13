@@ -1,45 +1,56 @@
 {
   "name": "effort-router",
-  "version": "0.2.0",
-  "description": "Classifies each message as discussion or implementation, sets the main model's effort (and optionally its model) to match, and routes implementation to an implementer agent.",
+  "version": "0.4.0",
+  "description": "Classifies each message as discussion, design or implementation, sets the main loop's effort to match without changing its model, and hands implementation to an implementer agent on a second model.",
+  "author": { "name": "Zenadi" },
+  "license": "MIT",
+  "repository": "https://github.com/zeapo/claude-code-mods",
   "types": "./types/index.d.ts",
   "userConfig": {
-    "chat_effort": {
+    "main_model": {
       "type": "string",
-      "title": "Chat effort",
+      "title": "Main model",
+      "description": "Model of the main loop. Only a session whose model id contains this text is routed, and the mod never changes its model; empty routes a session on any model.",
+      "default": "fable"
+    },
+    "sub_model": {
+      "type": "string",
+      "title": "Sub model",
+      "description": "Model of the implementer agent, which does the code changes in impl: an alias or a full id. Other subagents keep their own models.",
+      "default": "opus"
+    },
+    "chat_main_effort": {
+      "type": "string",
+      "title": "Chat main effort",
       "description": "Effort of the main loop on a discussion message.",
       "default": "low",
       "options": ["low", "medium", "high", "xhigh", "max"]
     },
-    "impl_effort": {
+    "design_main_effort": {
       "type": "string",
-      "title": "Implementation effort",
+      "title": "Design main effort",
+      "description": "Effort of the main loop on a design message.",
+      "default": "xhigh",
+      "options": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "impl_main_effort": {
+      "type": "string",
+      "title": "Implementation main effort",
       "description": "Effort of the main loop on an implementation message.",
       "default": "high",
       "options": ["low", "medium", "high", "xhigh", "max"]
     },
-    "chat_model": {
+    "impl_sub_effort": {
       "type": "string",
-      "title": "Chat model",
-      "description": "Model of the main loop on a discussion message: an alias (haiku, sonnet, opus) or a full id. Empty keeps the session's model. A model that changes between messages loses the prompt cache.",
-      "default": ""
-    },
-    "impl_model": {
-      "type": "string",
-      "title": "Implementation model",
-      "description": "Model of the main loop on an implementation message: an alias or a full id. Empty keeps the session's model. A model that changes between messages loses the prompt cache.",
-      "default": ""
-    },
-    "routed_model": {
-      "type": "string",
-      "title": "Routed session model",
-      "description": "Only a session whose model id contains this text is routed. Empty routes every model.",
-      "default": "fable"
+      "title": "Implementation sub effort",
+      "description": "Default effort of the implementer agent; the main model may pass another on a call.",
+      "default": "high",
+      "options": ["low", "medium", "high", "xhigh", "max"]
     },
     "classifier_model": {
       "type": "string",
       "title": "Classifier model",
-      "description": "Model that decides chat or impl for each message: an alias or a full id.",
+      "description": "Model that decides chat, design or impl for each message: an alias or a full id.",
       "default": "haiku"
     },
     "classifier_timeout_ms": {
@@ -57,21 +68,8 @@
     "delegate": {
       "type": "boolean",
       "title": "Delegate implementation",
-      "description": "On an implementation message, tell the main model to hand the code changes to the implementer agent. Off: only the effort and model change.",
+      "description": "On an implementation message, tell the main model to hand the code changes to the implementer agent. Off: only the effort changes.",
       "default": true
-    },
-    "implementer_model": {
-      "type": "string",
-      "title": "Implementer model",
-      "description": "Model of the implementer agent: an alias or a full id.",
-      "default": "opus"
-    },
-    "implementer_effort": {
-      "type": "string",
-      "title": "Implementer effort",
-      "description": "Default effort of the implementer agent; the main model may pass another on a call.",
-      "default": "high",
-      "options": ["low", "medium", "high", "xhigh", "max"]
     }
   }
 }

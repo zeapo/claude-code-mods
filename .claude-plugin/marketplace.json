@@ -1,0 +1,12 @@
+{
+  "name": "claude-code-mods",
+  "owner": { "name": "Zenadi" },
+  "description": "Mods for Claude Code: plugins with a hooks module that change how Claude Code behaves or what it shows.",
+  "plugins": [
+    {
+      "name": "effort-router",
+      "source": "./mods/effort-router",
+      "description": "Classifies each message as discussion, design or implementation, sets the main loop's effort to match without changing its model, and hands implementation to an implementer agent on a second model."
+    }
+  ]
+}

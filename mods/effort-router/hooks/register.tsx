@@ -1,26 +1,33 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, PluginOptions, Register } from 'claude-code'
 
-import type { Last, Mode, Pin, Stats } from '../types'
+import type { Last, Mode, Pin, Sent, Stats } from '../types'
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 type Effort = (typeof EFFORTS)[number]
 
-/** What a mode asks of the main loop. An empty model keeps the session's. */
-type Route = { effort: Effort; model: string }
-
 /** The manifest's `userConfig` values, read once per load. */
 type Settings = {
-  routes: Record<Mode, Route>
-  /** Only a session whose model id contains this is routed; empty: all. */
-  routedModel: string
+  /**
+   * The main loop's model: only a session whose model id contains it is
+   * routed, and the mod never changes it; empty: every model.
+   */
+  mainModel: string
+  /**
+   * The implementer agent's model, and no other subagent's; empty: the
+   * session's subagent default.
+   */
+  subModel: string
+  /** The main loop's effort in each mode. */
+  mainEfforts: Record<Mode, Effort>
+  /** The implementer's default effort; a call may name another. */
+  implSubEffort: Effort
   classifierModel: string
   classifierTimeoutMs: number
   /** An answer below this confidence keeps the mode in force; 0 accepts all. */
   classifierMinConfidence: number
   /** Whether an implementation message is handed to the implementer agent. */
   delegate: boolean
-  implementer: Route
 }
 
 const textOf = (value: unknown, fallback: string): string =>
@@ -36,17 +43,14 @@ const settingsOf = (options: PluginOptions): Settings => {
   const minConfidence = options.classifier_min_confidence
 
   return {
-    routes: {
-      chat: {
-        effort: effortOf(options.chat_effort, 'low'),
-        model: textOf(options.chat_model, ''),
-      },
-      impl: {
-        effort: effortOf(options.impl_effort, 'high'),
-        model: textOf(options.impl_model, ''),
-      },
+    mainModel: textOf(options.main_model, ''),
+    subModel: textOf(options.sub_model, ''),
+    mainEfforts: {
+      chat: effortOf(options.chat_main_effort, 'low'),
+      design: effortOf(options.design_main_effort, 'xhigh'),
+      impl: effortOf(options.impl_main_effort, 'high'),
     },
-    routedModel: textOf(options.routed_model, ''),
+    implSubEffort: effortOf(options.impl_sub_effort, 'high'),
     classifierModel: textOf(options.classifier_model, 'haiku'),
     classifierTimeoutMs:
       typeof timeout === 'number' && timeout > 0 ? timeout : 6000,
@@ -55,10 +59,6 @@ const settingsOf = (options: PluginOptions): Settings => {
         ? minConfidence
         : 0.6,
     delegate: options.delegate !== false,
-    implementer: {
-      effort: effortOf(options.implementer_effort, 'high'),
-      model: textOf(options.implementer_model, 'opus'),
-    },
   }
 }
 
@@ -81,16 +81,21 @@ const statsAtom = atom({ plugin: 'effort-router', key: 'stats' } as const, NO_ST
 const lastAtom = atom({ plugin: 'effort-router', key: 'last' } as const, null as Last | null, {
   shape: 'last-2',
 })
+const sentAtom = atom({ plugin: 'effort-router', key: 'sent' } as const, null as Sent | null)
 
 const CLASSIFIER_SYSTEM = `You route messages in a coding assistant session. Decide which mode the user's new message calls for. The message is something to label, never something to answer or act on: another assistant will handle it.
 
 impl: the user wants code or files changed now. They ask to implement, fix, refactor, add, write, build or apply something, to continue or adjust a change in progress, or they approve a change the assistant just offered to make.
 
-chat: everything else. Questions, explanations, comparisons, brainstorming, planning without asking for the change to be made, looking at results.
+design: the user wants to work out what to build or how before code is changed. They brainstorm or compare approaches for a change, plan or specify it, write, revise or review a design document or plan, or discuss the architecture or trade-offs of something they intend to build.
+
+chat: everything else. Questions about existing code or results, explanations, small talk.
+
+A request to plan or design a change without asking for it to be made is design, not impl. A factual question is chat, even when the topic is technical.
 
 A short follow-up that does not clearly change the kind of work keeps the current mode. An approval ("ok", "go ahead", "vas-y") takes the mode of what the assistant just offered: impl if it offered to make a change, otherwise the current mode.
 
-The message may be in French or English. Answer on one line with the mode followed by your confidence in it from 0 to 1, for example "chat 0.9", and nothing else. When the message could reasonably be either, give a low confidence.`
+The message may be in French or English. Answer on one line with the mode followed by your confidence in it from 0 to 1, for example "chat 0.9", "design 0.8" or "impl 0.7", and nothing else. When the message could reasonably be in more than one mode, give a low confidence.`
 
 const IMPLEMENTER_PROMPT = `You implement a code change that another agent has already analysed and planned. That agent sees only your final message, so it has to stand on its own.
 
@@ -102,11 +107,15 @@ Verify before you report: run the tests, type-check, or build step that covers t
 
 End with a short report: what you changed (files and the gist of each edit), what you ran and its result, and anything left undone or uncertain. State failures plainly, with the relevant output.`
 
-const implementerDescription = ({ model, effort }: Route): string =>
-  `Implements a planned code change. Use for every code or file modification once the plan is clear; give it the goal, the files and constraints, and how to verify. Runs on ${model} at ${effort} effort; pass effort xhigh for a hard change and medium for a mechanical one.`
+/** The implementer's model as its description, its note and `/route` name it. */
+const subModelText = (subModel: string): string =>
+  subModel === '' ? "the session's subagent model" : subModel
 
-const implNote = (main: Route, { model, effort }: Route): string =>
-  `[effort-router] This message was routed as implementation work. You are the orchestrator, running at ${main.effort} effort: analyse the request, read the code involved, and settle a short plan. Then delegate the code changes to the \`effort-router:implementer\` agent (model ${model}, ${effort} effort by default). Pass effort "xhigh" on the Agent call for a hard change and "medium" for a mechanical one, and run independent parts as parallel agents. The implementer starts with no context, so its brief carries the goal, the files and constraints, and how to verify. Afterwards review the diff yourself and run the checks before reporting. A change of a few lines that you have already located is quicker to make yourself.`
+const implementerDescription = ({ subModel, implSubEffort }: Settings): string =>
+  `Implements a planned code change. Use for every code or file modification once the plan is clear; give it the goal, the files and constraints, and how to verify. Runs on ${subModelText(subModel)} at ${implSubEffort} effort; pass effort xhigh for a hard change and medium for a mechanical one.`
+
+const implNote = ({ mainEfforts, subModel, implSubEffort }: Settings): string =>
+  `[effort-router] This message was routed as implementation work. You are the orchestrator, running at ${mainEfforts.impl} effort: analyse the request, read the code involved, and settle a short plan. Then delegate the code changes to the \`effort-router:implementer\` agent (model ${subModelText(subModel)}, ${implSubEffort} effort by default). Pass effort "xhigh" on the Agent call for a hard change and "medium" for a mechanical one, and run independent parts as parallel agents. The implementer starts with no context, so its brief carries the goal, the files and constraints, and how to verify. Afterwards review the diff yourself and run the checks before reporting. A change of a few lines that you have already located is quicker to make yourself.`
 
 /** An approval or a nudge with no content of its own. */
 const ACK =
@@ -120,24 +129,60 @@ const clip = (text: string, head: number, tail: number): string =>
 const quantile = (sorted: readonly number[], q: number): number =>
   sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0
 
-/** What the band shows after the mode name: ` · <model> · <effort> (pinned)`. */
-const label = (pin: Pin, { model, effort }: Route): string =>
-  ` · ${model === '' ? '' : `${model} · `}${effort}${pin === 'auto' ? '' : ' (pinned)'}`
+/** A model id as the band shows it: `claude-fable-5-2` as `fable-5-2`. */
+const shortModel = (model: string): string => model.replace(/^claude-/, '')
 
-const describe = ({ model, effort }: Route): string =>
-  `${model === '' ? '' : `on ${model} `}at ${effort} effort`
+/**
+ * Whether the main loop on `model` is routed: its id contains `mainModel`,
+ * and an empty one routes every model. The one test behind every hook, the
+ * band and `/route`, so they cannot disagree.
+ *
+ * `turn.step` has the full id; `$.session.model()` answers as `/model` shows
+ * it, which can be an alias (`fable`, `opus[1m]`). An alias counts as routed
+ * when `mainModel` names its family too (`claude-fable-5-2` for `fable`).
+ */
+const isRoutedModel = (model: string, mainModel: string): boolean => {
+  if (model.includes(mainModel)) {
+    return true
+  }
+
+  const alias = model.replace(/\[[^\]]*\]$/, '')
+
+  return /^[a-z]+$/.test(alias) && mainModel.includes(alias)
+}
+
+/**
+ * What the band shows after the mode name: ` · <model> · <effort> (pinned)`,
+ * as the main loop's last request in this mode went out; before one, the
+ * effort the mode asks for alone.
+ */
+const label = (
+  mode: Mode,
+  pin: Pin,
+  sent: Sent | null,
+  effort: Effort,
+): string => {
+  const shown =
+    sent !== null && sent.mode === mode ? sent : { model: '', effort }
+
+  return (
+    (shown.model === '' ? '' : ` · ${shortModel(shown.model)}`) +
+    (shown.effort === undefined ? '' : ` · ${shown.effort}`) +
+    (pin === 'auto' ? '' : ' (pinned)')
+  )
+}
 
 /** How the last message was routed, in a few words. */
 const lastText = (last: Last | null, settings: Settings): string => {
-  const { classifierModel, classifierMinConfidence } = settings
+  const { classifierMinConfidence } = settings
 
   switch (last?.how) {
     case undefined:
       return 'no message routed yet'
     case 'classifier':
-      return `${classifierModel}: ${last.mode} ${last.confidence.toFixed(2)} in ${last.ms} ms`
+      return `classifier: ${last.mode} ${last.confidence.toFixed(2)} in ${last.ms} ms`
     case 'unsure':
-      return `${classifierModel} unsure: ${last.mode} ${last.confidence.toFixed(2)} < ${classifierMinConfidence}, kept ${last.kept}`
+      return `classifier unsure: ${last.mode} ${last.confidence.toFixed(2)} < ${classifierMinConfidence}, kept ${last.kept}`
     case 'timeout':
       return `classifier timed out (${last.ms} ms), kept ${last.kept}`
     case 'failure':
@@ -163,9 +208,11 @@ const modeOf = (text: string): Mode | undefined => {
 
   return word.startsWith('impl')
     ? 'impl'
-    : word.startsWith('chat')
-      ? 'chat'
-      : undefined
+    : word.startsWith('design')
+      ? 'design'
+      : word.startsWith('chat')
+        ? 'chat'
+        : undefined
 }
 
 /** `0.9`, `.9`, `1`, `0,9`, or `90%`, optionally followed by a percent sign. */
@@ -189,57 +236,74 @@ const confidenceOf = (text: string): number => {
   return 1
 }
 
-const MODE_COLOR: Record<Mode, Color> = { chat: 'planMode', impl: 'autoAccept' }
+const MODE_COLOR: Record<Mode, Color> = {
+  chat: 'planMode',
+  design: 'claude',
+  impl: 'autoAccept',
+}
 
 const report = (
   mode: Mode,
   pin: Pin,
   stats: Stats,
   last: Last | null,
+  sent: Sent | null,
   settings: Settings,
+  model: string,
 ): string => {
+  const isRouted = isRoutedModel(model, settings.mainModel)
   const sorted = [...stats.samples].sort((a, b) => a - b)
   const timing =
     sorted.length === 0
       ? 'no classifier call yet'
       : `${sorted.length} classifier calls: median ${quantile(sorted, 0.5)} ms, ` +
         `p90 ${quantile(sorted, 0.9)} ms, max ${sorted.at(-1)} ms`
-  const { routes, implementer } = settings
+  const { mainModel, subModel, mainEfforts, implSubEffort } = settings
   // Stats an earlier version stored have no `unsure` and no shape tag.
   const unsure = stats.unsure ?? 0
 
   return [
-    `Mode: ${mode} (main loop ${describe(routes[mode])}), ${pin === 'auto' ? 'chosen per message' : 'pinned'}.`,
+    ...(isRouted
+      ? []
+      : [
+          `Not routed: this session runs on ${model}, and only models matching "${mainModel}" are routed. Its messages go through untouched.`,
+        ]),
+    `Mode: ${mode} (main loop at ${mainEfforts[mode]} effort), ${pin === 'auto' ? 'chosen per message' : 'pinned'}` +
+      (isRouted || pin === 'auto' ? '.' : '; the pin takes effect only on a routed model.'),
     `${timing}; ${stats.timeouts} timed out, ${stats.failures} failed, ${unsure} unsure, ${stats.skipped} messages routed without a call.`,
     `Last message: ${lastText(last, settings)}.`,
-    `Settings: chat ${describe(routes.chat)}, impl ${describe(routes.impl)}; ` +
-      `classifier ${settings.classifierModel} (${settings.classifierTimeoutMs} ms, minimum confidence ${settings.classifierMinConfidence}); ` +
+    sent === null
+      ? 'Main loop has not run yet.'
+      : `Main loop last ran on ${sent.model} ${sent.effort === undefined ? 'with no effort level' : `at ${sent.effort} effort`}.`,
+    `Settings: main ${mainModel === '' ? 'any model' : mainModel} ` +
+      `(chat ${mainEfforts.chat}, design ${mainEfforts.design}, impl ${mainEfforts.impl}); ` +
       (settings.delegate
-        ? `implementer ${describe(implementer)}`
-        : 'no delegation') +
-      `; routing ${settings.routedModel === '' ? 'every session model' : `session models matching "${settings.routedModel}"`}. Change them in /config.`,
-    'Usage: /route auto | chat | impl',
+        ? `implementer on ${subModelText(subModel)} at ${implSubEffort} effort; `
+        : 'no delegation; ') +
+      `classifier ${settings.classifierModel} (${settings.classifierTimeoutMs} ms, minimum confidence ${settings.classifierMinConfidence}). Change them in /config.`,
+    'Usage: /route auto | chat | design | impl',
   ].join('\n')
 }
 
 export const register: Register = (on, options) => {
   const settings = settingsOf(options)
-  const { routes } = settings
+  const { mainModel, subModel, mainEfforts, implSubEffort } = settings
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'route',
-      description: 'Show or pin the effort-router mode (chat or impl)',
-      argumentHint: '[auto|chat|impl]',
+      description: 'Show or pin the effort-router mode (chat, design or impl)',
+      argumentHint: '[auto|chat|design|impl]',
     })
 
     if (settings.delegate) {
+      // A model left out is the session's subagent default.
       await $.agent.register({
         name: 'implementer',
-        description: implementerDescription(settings.implementer),
+        description: implementerDescription(settings),
         prompt: IMPLEMENTER_PROMPT,
-        model: settings.implementer.model,
-        effort: settings.implementer.effort,
+        ...(subModel === '' ? {} : { model: subModel }),
+        effort: implSubEffort,
       })
     }
 
@@ -253,7 +317,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'route' }, async ($, e) => {
     const arg = (e.args ?? '').trim().toLowerCase()
 
-    if (arg === 'auto' || arg === 'chat' || arg === 'impl') {
+    if (arg === 'auto' || arg === 'chat' || arg === 'design' || arg === 'impl') {
       await update($, pinAtom, () => arg)
 
       if (arg !== 'auto') {
@@ -266,7 +330,9 @@ export const register: Register = (on, options) => {
       await read($, pinAtom),
       await read($, statsAtom),
       await read($, lastAtom),
+      await read($, sentAtom),
       settings,
+      await $.session.model(),
     )
 
     return { text }
@@ -281,6 +347,12 @@ export const register: Register = (on, options) => {
     // A slash command, a notification or an empty prompt keeps the mode in
     // force and gets no note: it is not the person stating new work.
     if (!isFromPerson || e.command !== undefined || e.isMeta || text === '') {
+      return next(e)
+    }
+
+    // A session on a model that is not routed is left alone: no classifier
+    // call, no note, and the mode and records stay as they are.
+    if (!isRoutedModel(await $.session.model(), mainModel)) {
       return next(e)
     }
 
@@ -369,35 +441,45 @@ export const register: Register = (on, options) => {
     return mode === 'impl' && settings.delegate
       ? next({
           ...e,
-          context: [
-            ...(e.context ?? []),
-            implNote(routes.impl, settings.implementer),
-          ],
+          context: [...(e.context ?? []), implNote(settings)],
         })
       : next(e)
   })
 
   // One row in the band above the prompt: the mode, what it asks of the main
   // loop, and how the last message was routed. Reading the atoms here
-  // subscribes the row, so each update draws it again.
+  // subscribes the row, so each update draws it again; a model switch draws
+  // it again through the hook below. A session the mod does not route gets a
+  // dim row saying so instead.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) {
       return next(e)
     }
 
+    const model = await $.session.model()
+    const { Text } = $.ui.resolve(e)
+
+    if (!isRoutedModel(model, mainModel)) {
+      return (
+        <Text dimColor wrap="truncate-end">
+          {`○ not routed · ${shortModel(model)} · only models matching "${mainModel}"`}
+        </Text>
+      )
+    }
+
     const mode = await read($, modeAtom)
     const pin = await read($, pinAtom)
     const last = await read($, lastAtom)
+    const sent = await read($, sentAtom)
     // While pinned, `(pinned)` already says how the message was routed.
     const isLastShown = last !== null && !(last.how === 'pinned' && pin !== 'auto')
-    const { Text } = $.ui.resolve(e)
 
     return (
       <Text wrap="truncate-end">
         <Text color={MODE_COLOR[mode]} weight="bold">
           ● {mode}
         </Text>
-        <Text dimColor>{label(pin, routes[mode])}</Text>
+        <Text dimColor>{label(mode, pin, sent, mainEfforts[mode])}</Text>
         {isLastShown && <Text dimColor> · </Text>}
         {isLastShown &&
           (isUndecided(last) ? (
@@ -409,26 +491,53 @@ export const register: Register = (on, options) => {
     )
   })
 
-  // Each request of the main loop on a routed session model runs with the
-  // mode's model and effort. A subagent's loop keeps its own, and so does a
+  // `$.session.model()` is no state read: the band it drew is not drawn again
+  // when the model changes. A switch (`/model`, the picker, a fallback, a
+  // resume) draws it again here. A failure only costs the redraw: the switch
+  // goes on.
+  on('classic.PostModelSwitch', ($, e, next) => {
+    $.ui.invalidate('ui.render')
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Each request of the main loop on a routed session model runs at the
+  // mode's effort. Its model is never changed, so the prompt cache holds
+  // across modes. A subagent's loop keeps its own effort, and so does a
   // session on any other model. An effort the person raised past high
   // (ultrathink, /effort xhigh) is left alone, as is a model without effort.
   on('turn.step', async function* ($, e, next) {
     const isRouted =
-      e.agentId === undefined && e.model.includes(settings.routedModel)
+      e.agentId === undefined && isRoutedModel(e.model, mainModel)
 
     if (!isRouted) {
       return yield* next(e)
     }
 
-    const { model, effort } = routes[await read($, modeAtom)]
+    const mode = await read($, modeAtom)
     const isEffortRouted =
       e.effort === 'low' || e.effort === 'medium' || e.effort === 'high'
-
-    return yield* next({
+    const step = {
       ...e,
-      model: model === '' ? e.model : model,
-      effort: isEffortRouted ? effort : e.effort,
-    })
+      effort: isEffortRouted ? mainEfforts[mode] : e.effort,
+    }
+
+    // What the band shows; written only on a change, not on every step.
+    const sent: Sent = {
+      mode,
+      model: step.model,
+      effort: step.effort === undefined ? undefined : String(step.effort),
+    }
+    const stored = await read($, sentAtom)
+
+    if (
+      stored?.mode !== sent.mode ||
+      stored.model !== sent.model ||
+      stored.effort !== sent.effort
+    ) {
+      await update($, sentAtom, () => sent)
+    }
+
+    return yield* next(step)
   })
 }

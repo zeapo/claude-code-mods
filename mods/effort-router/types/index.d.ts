@@ -1,4 +1,4 @@
-export type Mode = 'chat' | 'impl'
+export type Mode = 'chat' | 'design' | 'impl'
 
 export type Pin = 'auto' | Mode
 
@@ -33,6 +33,14 @@ export type Last =
   /** A bare approval in impl: no classifier call. */
   | { how: 'ack' }
 
+/** What the main loop's last routed request went out with, and in which mode. */
+export type Sent = {
+  mode: Mode
+  model: string
+  /** A level, or a number as text; absent on a model without effort. */
+  effort: string | undefined
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'effort-router': {
@@ -41,6 +49,8 @@ declare module 'claude-code' {
       stats: Stats
       /** `null` until the first routed message. */
       last: Shaped<Last | null>
+      /** `null` until the main loop's first routed request. */
+      sent: Sent | null
     }
   }
 }
