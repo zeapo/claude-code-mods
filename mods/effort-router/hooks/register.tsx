@@ -28,6 +28,8 @@ type Settings = {
   classifierMinConfidence: number
   /** Whether an implementation message is handed to the implementer agent. */
   delegate: boolean
+  /** Whether the band says how the last message was routed. */
+  verbose: boolean
 }
 
 const textOf = (value: unknown, fallback: string): string =>
@@ -59,6 +61,7 @@ const settingsOf = (options: PluginOptions): Settings => {
         ? minConfidence
         : 0.6,
     delegate: options.delegate !== false,
+    verbose: options.verbose !== false,
   }
 }
 
@@ -472,7 +475,10 @@ export const register: Register = (on, options) => {
     const last = await read($, lastAtom)
     const sent = await read($, sentAtom)
     // While pinned, `(pinned)` already says how the message was routed.
-    const isLastShown = last !== null && !(last.how === 'pinned' && pin !== 'auto')
+    const isLastShown =
+      settings.verbose &&
+      last !== null &&
+      !(last.how === 'pinned' && pin !== 'auto')
 
     return (
       <Text wrap="truncate-end">

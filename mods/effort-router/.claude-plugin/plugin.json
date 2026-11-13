@@ -1,6 +1,6 @@
 {
   "name": "effort-router",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Classifies each message as discussion, design or implementation, sets the main loop's effort to match without changing its model, and hands implementation to an implementer agent on a second model.",
   "author": { "name": "Zenadi" },
   "license": "MIT",
@@ -69,6 +69,12 @@
       "type": "boolean",
       "title": "Delegate implementation",
       "description": "On an implementation message, tell the main model to hand the code changes to the implementer agent. Off: only the effort changes.",
+      "default": true
+    },
+    "verbose": {
+      "type": "boolean",
+      "title": "Show classifier status",
+      "description": "Show in the band how the last message was routed: the classifier's answer, confidence and time, or the timeout, failure or unsure answer that kept the mode. Off: the band shows the mode, model and effort only; /route still reports it.",
       "default": true
     }
   }

@@ -18,24 +18,34 @@ scope (where the mod is enabled). Then start a new session. Any mod listed
 under [Mods](#mods) installs the same way, with its own name in place of
 `effort-router`.
 
-### Working on the mods from a clone
-
-To edit the mods and run them from a clone of this repository instead:
+### Updating
 
 ```sh
-./install.sh
+claude plugin update effort-router
 ```
 
-This adds `mods/` to `env.CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`
-(the previous file is kept as `settings.json.bak`), so every new session loads
-each mod from the clone, and an interactive session reloads a mod when its
-files change. Run it once per machine, then start a new session.
-`./install.sh --uninstall` removes the declaration. Requires `jq`.
+Then start a new session.
 
-Use one route or the other for a given mod, not both at once: uninstall a mod
-installed from the marketplace (`claude plugin uninstall effort-router`)
-before running `./install.sh`, and run `./install.sh --uninstall` before
-installing from the marketplace.
+### Working on a mod from a clone
+
+To run a mod from a clone of this repository instead of its published copy,
+load its folder for one session; the session reloads the mod each time one of
+its files is saved:
+
+```sh
+claude --plugin-dir mods/effort-router
+```
+
+To run it from the clone in every session, add the clone as the marketplace
+and install the mod from it:
+
+```sh
+claude plugin marketplace add /path/to/the/clone
+claude plugin install effort-router@claude-code-mods
+```
+
+The mod is then read from the clone itself, and `/reload-plugins` picks up an
+edit.
 
 ## Mods
 
@@ -93,9 +103,6 @@ message was routed, what the main loop's last request went out with, and the
 settings. `/route chat`, `/route design` or `/route impl` pins the mode;
 `/route auto` goes back to choosing it per message.
 
-A mod's commands exist once the session has started, so in the desktop app
-`/route` is available after the first message of a session.
-
 ### What it shows
 
 A row in the band above the prompt shows the mode, the model and effort the
@@ -114,7 +121,8 @@ An effort you raised past high shows as it went out.
 The first two messages were decided by the classifier. The third got an answer
 below the minimum confidence and the fourth no answer in time: both kept the
 mode in force, and that part of the row shows in the warning colour. A pinned
-mode shows `(pinned)` after the effort.
+mode shows `(pinned)` after the effort. With `verbose` off, the row stops
+after the effort.
 
 The last row is a session whose model does not contain `main_model`: its
 messages go through untouched, with no classifier call and no note, and the
@@ -144,19 +152,19 @@ Two models, and an effort for each mode they run in. With the defaults:
 | `classifier_timeout_ms` | `6000` | How long the classifier may take before the mode in force is kept |
 | `classifier_min_confidence` | `0.6` | Confidence from 0 to 1 the classifier must give its answer for the mode to change. An answer below it keeps the mode in force; 0 accepts every answer |
 | `delegate` | `true` | On an implementation message, tell the main model to hand the code changes to the implementer agent. Off: only the effort changes |
+| `verbose` | `true` | Show in the band how the last message was routed. Off: the band shows the mode, model and effort only; `/route` still reports it |
 
 Efforts are `low`, `medium`, `high`, `xhigh` or `max`; models are an alias
 (`haiku`, `sonnet`, `opus`) or a full id. The main loop's model is never
-changed, so its prompt cache is kept across modes as far as the model takes
-effort per message. The sub model runs the implementer and nothing else: other
-subagents (Explore, general-purpose, a reviewer) keep their own model and
-effort.
+changed, so its prompt cache is kept across modes. The sub model runs the
+implementer and nothing else: other subagents (Explore, general-purpose, a
+reviewer) keep their own model and effort.
 
 ## Adding a mod
 
 Create `mods/<name>/` with `.claude-plugin/plugin.json`, `hooks/hooks.json` and
-the hooks module. No new `install.sh` run is needed: a new session loads it,
-and an interactive session reloads a mod when its files change.
+the hooks module, and run it from the clone as described under
+[Working on a mod from a clone](#working-on-a-mod-from-a-clone).
 
 ```sh
 claude plugin validate mods/<name>   # what the engine will accept or refuse
@@ -170,6 +178,10 @@ mod's `assets/` folder. A new mod also gets an entry in
 `.claude-plugin/marketplace.json`, with its `name`, its `source`
 (`./mods/<name>`) and the `description` of its `plugin.json`, so it can be
 installed from the marketplace.
+
+Once pushed, the mod installs by its name like the others. A change to a mod
+already published reaches its installed copies through `claude plugin update`:
+raise `version` in its `plugin.json` with the change.
 
 `.claude-plugin/types/` inside a mod is written by Claude Code and ignored by
 git.

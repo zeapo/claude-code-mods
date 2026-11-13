@@ -496,6 +496,35 @@ test('the band shows the mode and how the classifier routed the message, on ever
   expect(shown.text).toContain('Last message: classifier: chat 0.92 in 1840 ms.')
 })
 
+test(
+  'with verbose off the band leaves out how the message was routed',
+  { options: { verbose: false } },
+  async ($, on) => {
+    on('command.register', () => ({ value: { command: 'route' } }))
+    on('session.model', () => ({ value: 'claude-fable-5-2' }))
+    on('session.messages', () => ({ value: [] }))
+    on('clock.now', () => ({ value: 0 }))
+    // An unsure answer would otherwise show in the warning colour.
+    on('model.complete', () => ({
+      value: { isAnswered: true, text: 'chat 0.55', usage: USAGE },
+    }))
+    on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+
+    await $.prompt.submit(typed('et sinon ?'))
+
+    for (const surface of BAND_SURFACES) {
+      const ui = await $.ui.mount({ ...BAND, surface })
+
+      expect(await rowOf(ui)).toBe('● impl · high')
+      await ui.unmount()
+    }
+
+    // The report still says it.
+    const shown = await $.command.run(route())
+    expect(shown.text).toContain('Last message: classifier unsure: chat 0.55 < 0.6, kept impl.')
+  },
+)
+
 test('a timeout is recorded, and the band and /route say so', async ($, on) => {
   let now = 0
   const written: unknown[] = []
