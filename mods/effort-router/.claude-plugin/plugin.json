@@ -1,0 +1,6 @@
+{
+  "name": "effort-router",
+  "version": "0.1.0",
+  "description": "Classifies each message as discussion or implementation, sets the main model's effort to match, and routes implementation to an Opus implementer agent.",
+  "types": "./types/index.d.ts"
+}
