@@ -46,7 +46,13 @@
       "type": "number",
       "title": "Classifier timeout (ms)",
       "description": "How long the classifier may take before the mode in force is kept.",
-      "default": 2500
+      "default": 6000
+    },
+    "classifier_min_confidence": {
+      "type": "number",
+      "title": "Classifier minimum confidence",
+      "description": "Confidence from 0 to 1 the classifier must give its answer for the mode to change. An answer below it keeps the mode in force; 0 accepts every answer.",
+      "default": 0.6
     },
     "delegate": {
       "type": "boolean",
